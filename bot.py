@@ -1,72 +1,81 @@
-import discord
-import random
-import requests
-from discord.ext import commands
+import openai
 import os
 from dotenv import load_dotenv
+import discord
+from discord.ext import commands
 
+# Load environment variables
 load_dotenv()
 
-BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+# Discord Bot Token
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
-def fetch_problems_by_difficulty(difficulty):
-    """
-    This function is the function that actually grabs the leetcode problems from the website. The function uses 
-    GraphQL, a query that holds every single LeetCode problem and obtains one when called.
-    """
-    url = "https://leetcode.com/graphql"
-    query = """
-    query {
-        problemsetQuestionListV2(
-            limit: 3416
-        ) {
-            questions {
-                title
-                titleSlug
-            }
-        }
-    }
-    """
-    response = requests.post(url, json={"query": query})
+# OpenAI API Key
+openai.api_key = os.getenv("OPENAI_BOT_TOKEN")
 
-    print("API Response:", response.text)  # Debugging line
-
-    if response.status_code == 200:
-        data = response.json()
-        questions = data["data"]["problemsetQuestionListV2"]["questions"]
-        return [
-            {"title": q["title"], "url": f"https://leetcode.com/problems/{q['titleSlug']}/"}
-            for q in questions
-        ]
-    else:
-        return None
-
-    
-    # Create intents
+# Setup the bot
 intents = discord.Intents.default()
-intents.messages = True  # Allow bot to read messages in channels
-intents.message_content = True # Manually enables message content intent
-intents.guilds = True    # Allow bot to interact with server-related events
+intents.message_content = True  # Allow reading message content
 
-# Discord bot setup
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Dictionary to store conversation history per user
+conversation_history = {}
+MAX_HISTORY = 10
 
 @bot.event
 async def on_ready():
     print(f"We have logged in as {bot.user}")
 
+@bot.event
+async def on_message(message):
+    # Prevent the bot from responding to its own messages or other bots
+    if message.author.bot:
+        return
 
-@bot.command()
-async def leetcode(ctx, difficulty: str):
-    problems = fetch_problems_by_difficulty(difficulty)
-    if problems:
-        problem = random.choice(problems)
-        await ctx.send(f"Try this problem: **{problem['title']}**\n{problem['url']}")
-    else:
-        await ctx.send("Could not fetch problems. Please try again later.")
+    # Check if the message starts with the command prefix to process commands
+    if message.content.startswith(bot.command_prefix):
+        await bot.process_commands(message)
+        return
+
+    user_id = message.author.id
+
+    # Initialize conversation history for the user if not present
+    if user_id not in conversation_history:
+        conversation_history[user_id] = []
+
+    # Append the user's message to their conversation history
+    conversation_history[user_id].append({"role": "user", "content": message.content})
+
+    # Limit the history to the last MAX_HISTORY messages to manage token usage
+    if len(conversation_history[user_id]) > MAX_HISTORY:
+        conversation_history[user_id] = conversation_history[user_id][-MAX_HISTORY:]
+
+    try:
+        # Generate a response using OpenAI's ChatCompletion API
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",  # You can use "gpt-4" if available and needed
+            messages=conversation_history[user_id],
+            max_tokens=75,
+            temperature=0.7,
+            n=1,
+            stop=None,
+        )
+
+        reply = response['choices'][0]['message']['content'].strip()
+
+        # Append the assistant's reply to the conversation history
+        conversation_history[user_id].append({"role": "assistant", "content": reply})
+
+        # Send the reply back to the Discord channel
+        await message.channel.send(reply)
+
+    except openai.error.OpenAIError as e:
+        print(f"OpenAI API error: {e}")
+        await message.channel.send("Sorry, I'm having trouble processing your request right now.")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        await message.channel.send("An unexpected error occurred. Please try again later.")
 
 # Run the bot
-if BOT_TOKEN:
-    bot.run(BOT_TOKEN)
-else:
-    print("Unable to detect a bot token.")
+bot.run(DISCORD_BOT_TOKEN)
