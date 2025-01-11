@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 import discord
 from discord.ext import commands
-from thread_management import create_thread  # Import the create_thread function
+from thread_management import * # Import the create_thread function
 
 # Load environment variables
 load_dotenv()
